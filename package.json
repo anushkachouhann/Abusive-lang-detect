@@ -1,5 +1,5 @@
 {
-  "name": "detect-app",
+  "name": "detect-abuse-msg",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -54,10 +54,15 @@
     "@adonisjs/auth": "^9.4.0",
     "@adonisjs/core": "^6.18.0",
     "@adonisjs/cors": "^2.2.1",
-    "@adonisjs/lucid": "^21.6.1",
+    "@adonisjs/lucid": "^21.8.2",
+    "@huggingface/inference": "^3.15.0",
     "@vinejs/vine": "^3.0.1",
+    "bad-words": "^4.0.0",
+    "leo-profanity": "^1.9.0",
     "luxon": "^3.7.2",
     "mysql2": "^3.16.1",
+    "obscenity": "^0.4.6",
+    "profanity-hindi": "^1.1.0",
     "reflect-metadata": "^0.2.2"
   },
   "hotHook": {
