@@ -8,6 +8,7 @@ export default class extends BaseSchema {
       table.increments('id')
       table.string('title').notNullable()
       table.text('content').notNullable()
+      table.text('language').nullable()
       table.boolean('is_flagged').defaultTo(false)
       table.text('flagged_words').nullable()
       table.timestamp('created_at')

@@ -12,28 +12,33 @@ export default class LeoProfanityNotesController {
   constructor() {
     this.leoProfanityService = new LeoProfanityService()
   }
- 
+
   async leoProfanityIndex({ response }: HttpContext) {
-    const notes = await Note.query().orderBy('created_at', 'desc')
-    return response.json({
-      success: true,
-      data: notes,
-    })
+    try {
+      const notes = await Note.query().orderBy('created_at', 'desc')
+      return response.json({
+        success: true,
+        data: notes,
+      })
+    } catch (error) {
+      return response.status(500).json({
+        success: false,
+        message: 'Failed to fetch notes',
+        error: error instanceof Error ? error.message : 'Unknown error'
+      })
+    }
   }
- 
+
   async leoProfanityStore({ request, response }: HttpContext) {
     const payload = await request.validateUsing(createLeoProfanityNoteValidator)
 
-    try { 
-      const titleAnalysis = await this.leoProfanityService.leoProfanityAnalyzeText(
-        payload.title,
-        payload.language
-      )
-      const contentAnalysis = await this.leoProfanityService.leoProfanityAnalyzeText(
-        payload.content,
-        payload.language
-      )
- 
+    try {
+      // Analyze title and content for profanity
+      const [titleAnalysis, contentAnalysis] = await Promise.all([
+        this.leoProfanityService.leoProfanityAnalyzeText(payload.title, payload.language),
+        this.leoProfanityService.leoProfanityAnalyzeText(payload.content, payload.language),
+      ])
+
       const isClean = titleAnalysis.isClean && contentAnalysis.isClean
 
       if (!isClean) {
@@ -48,23 +53,17 @@ export default class LeoProfanityNotesController {
           message: 'Your note contains inappropriate language',
           errors: {
             flaggedWords: uniqueFlagged,
-            titleAnalysis: {
-              isClean: titleAnalysis.isClean,
-              flaggedWords: titleAnalysis.flaggedWords,
-              cleanedText: titleAnalysis.cleanedText,
-            },
-            contentAnalysis: {
-              isClean: contentAnalysis.isClean,
-              flaggedWords: contentAnalysis.flaggedWords,
-              cleanedText: contentAnalysis.cleanedText,
-            },
+            titleAnalysis,
+            contentAnalysis,
           },
         })
       }
- 
+
+      // Create note if content is clean
       const note = await Note.create({
         title: payload.title,
         content: payload.content,
+        language: payload.language || null,
         isFlagged: false,
         flaggedWords: null,
       })
@@ -76,7 +75,7 @@ export default class LeoProfanityNotesController {
       })
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-      
+
       return response.status(500).json({
         success: false,
         message: 'Failed to moderate content with Leo Profanity',
@@ -84,71 +83,82 @@ export default class LeoProfanityNotesController {
       })
     }
   }
- 
+
   async leoProfanityShow({ params, response }: HttpContext) {
-    const note = await Note.find(params.id)
+    try {
+      const note = await Note.find(params.id)
 
-    if (!note) {
-      return response.notFound({
+      if (!note) {
+        return response.notFound({
+          success: false,
+          message: 'Note not found',
+        })
+      }
+
+      return response.json({
+        success: true,
+        data: note,
+      })
+    } catch (error) {
+      return response.status(500).json({
         success: false,
-        message: 'Note not found',
+        message: 'Failed to fetch note',
+        error: error instanceof Error ? error.message : 'Unknown error'
       })
     }
-
-    return response.json({
-      success: true,
-      data: note,
-    })
   }
- 
+
   async leoProfanityUpdate({ params, request, response }: HttpContext) {
-    const note = await Note.find(params.id)
+    try {
+      const note = await Note.find(params.id)
 
-    if (!note) {
-      return response.notFound({
-        success: false,
-        message: 'Note not found',
-      })
-    }
+      if (!note) {
+        return response.notFound({
+          success: false,
+          message: 'Note not found',
+        })
+      }
 
-    const payload = await request.validateUsing(updateLeoProfanityNoteValidator)
+      const payload = await request.validateUsing(updateLeoProfanityNoteValidator)
 
-    try { 
+      // Only analyze provided fields
+      const analyses: Array<{ analysis: any; field: keyof typeof payload; value: string }> = []
+
       if (payload.title) {
         const titleAnalysis = await this.leoProfanityService.leoProfanityAnalyzeText(
           payload.title,
           payload.language
         )
-        if (!titleAnalysis.isClean) {
-          return response.badRequest({
-            success: false,
-            message: 'Title contains inappropriate language',
-            errors: {
-              flaggedWords: titleAnalysis.flaggedWords,
-              cleanedText: titleAnalysis.cleanedText,
-            },
-          })
-        }
-        note.title = payload.title
+        analyses.push({ analysis: titleAnalysis, field: 'title', value: payload.title })
       }
- 
+
       if (payload.content) {
         const contentAnalysis = await this.leoProfanityService.leoProfanityAnalyzeText(
           payload.content,
           payload.language
         )
-        if (!contentAnalysis.isClean) {
-          return response.badRequest({
-            success: false,
-            message: 'Content contains inappropriate language',
-            errors: {
-              flaggedWords: contentAnalysis.flaggedWords,
-              cleanedText: contentAnalysis.cleanedText,
-            },
-          })
-        }
-        note.content = payload.content
+        analyses.push({ analysis: contentAnalysis, field: 'content', value: payload.content })
       }
+
+      // Check if any analysis failed
+      const failedAnalysis = analyses.find(analysis => !analysis.analysis.isClean)
+
+      if (failedAnalysis) {
+        return response.badRequest({
+          success: false,
+          message: `${failedAnalysis.field} contains inappropriate language`,
+          errors: {
+            flaggedWords: failedAnalysis.analysis.flaggedWords,
+            cleanedText: failedAnalysis.analysis.cleanedText,
+            field: failedAnalysis.field,
+          },
+        })
+      }
+
+      // Update note with clean content
+      if (payload.title) note.title = payload.title
+      if (payload.content) note.content = payload.content
+      if (payload.language) note.language = payload.language
 
       await note.save()
 
@@ -159,7 +169,7 @@ export default class LeoProfanityNotesController {
       })
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-      
+
       return response.status(500).json({
         success: false,
         message: 'Failed to moderate content with Leo Profanity',
@@ -167,22 +177,57 @@ export default class LeoProfanityNotesController {
       })
     }
   }
- 
-  async leoProfanityDestroy({ params, response }: HttpContext) {
-    const note = await Note.find(params.id)
 
-    if (!note) {
-      return response.notFound({
+  async leoProfanityDestroy({ params, response }: HttpContext) {
+    try {
+      const note = await Note.find(params.id)
+
+      if (!note) {
+        return response.notFound({
+          success: false,
+          message: 'Note not found',
+        })
+      }
+
+      await note.delete()
+
+      return response.json({
+        success: true,
+        message: 'Note deleted successfully',
+      })
+    } catch (error) {
+      return response.status(500).json({
         success: false,
-        message: 'Note not found',
+        message: 'Failed to delete note',
+        error: error instanceof Error ? error.message : 'Unknown error'
       })
     }
+  }
 
-    await note.delete()
+  // Additional utility method for quick profanity check
+  async quickProfanityCheck({ request, response }: HttpContext) {
+    try {
+      const { text, language } = request.only(['text', 'language'])
 
-    return response.json({
-      success: true,
-      message: 'Note deleted successfully',
-    })
+      if (!text) {
+        return response.badRequest({
+          success: false,
+          message: 'Text is required'
+        })
+      }
+
+      const analysis = await this.leoProfanityService.leoProfanityAnalyzeText(text, language)
+
+      return response.json({
+        success: true,
+        data: analysis
+      })
+    } catch (error) {
+      return response.status(500).json({
+        success: false,
+        message: 'Failed to check profanity',
+        error: error instanceof Error ? error.message : 'Unknown error'
+      })
+    }
   }
 }

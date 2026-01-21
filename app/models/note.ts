@@ -12,6 +12,9 @@ export default class Note extends BaseModel {
   declare content: string
 
   @column()
+  declare language: string | null
+
+  @column()
   declare isFlagged: boolean
 
   @column()
