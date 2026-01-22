@@ -4,6 +4,7 @@ import { Filter } from 'bad-words'
 // @ts-expect-error - package ships without types
 import * as profanityHindi from 'profanity-hindi'
 import customAbuseWords from '#config/custom_abuse_words'
+import { AllProfanity } from 'allprofanity'
 
 leoProfanity.loadDictionary()
 
@@ -56,10 +57,10 @@ const HINDI_CHAR_MAP: LeetSpeakMap = {
 class ProfanityDetector {
     private obscenityMatcher: RegExpMatcher
     private badWordsFilter: Filter
+    private allProfanity: AllProfanity
     private supportedLanguages: string[] = ['en', 'fr', 'ru', 'es', 'de', 'it', 'pt', 'pl', 'tr', 'ar', 'hi', 'ja', 'ko', 'zh']
 
     constructor() {
-        // Initialize obscenity matcher for English
         const englishData = englishDataset.build()
         this.obscenityMatcher = new RegExpMatcher({
             ...englishData,
@@ -67,12 +68,44 @@ class ProfanityDetector {
         })
 
         this.badWordsFilter = new Filter()
+
+        this.allProfanity = new AllProfanity({
+            algorithm: { matching: 'hybrid' },
+            performance: { enableCaching: true }
+        })
+
+        this.allProfanity.loadIndianLanguages()
     }
 
     private escapeRegex(str: string): string {
         return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     }
 
+    private reverseWords(text: string): string {
+        return text
+            .split(/(\s+)/)
+            .map(part => /\s+/.test(part) ? part : part.split('').reverse().join(''))
+            .join('')
+    }
+
+    private checkReversed(
+        text: string,
+        checker: (t: string) => boolean,
+        detector?: (t: string) => { detectedWords?: string[] }
+    ): { isProfane: boolean; flagged?: string[] } {
+        const revText = this.reverseWords(text)
+        const isProfane = checker(revText)
+
+        if (!isProfane || !detector) {
+            return { isProfane }
+        }
+
+        const result = detector(revText)
+        // Flagged words are reversed → reverse them back for readable report
+        const originalFlagged = result.detectedWords?.map(w => w.split('').reverse().join('')) || []
+
+        return { isProfane, flagged: originalFlagged }
+    }
     private normalizeText(text: string): string {
         return text
             .toLowerCase()
@@ -178,11 +211,11 @@ class ProfanityDetector {
             let flaggedWords: string[] = []
 
             const leoProfane = leoProfanity.check(lowerText)
-            const cleanedText = leoProfanity.clean(text)
+            const leoCleaned = leoProfanity.clean(text)
             const leoFlagged = this.extractFlaggedWords(text)
 
             const obscenityMatches = this.obscenityMatcher.getAllMatches(text)
-            const obscenityWords = obscenityMatches.map(match => match.matchedText)
+            const obscenityWords = obscenityMatches.map(match => text.slice(match.startIndex, match.endIndex))
 
             const badWordsProfane = this.badWordsFilter.isProfane(text)
 
@@ -190,14 +223,31 @@ class ProfanityDetector {
                 ? profanityHindi.isMessageDirty(text)
                 : false
 
+            const allProfanityProfane = this.allProfanity.check(text)
+            const allProfResult = this.allProfanity.detect(text)
+            const allProfFlagged = allProfResult.detectedWords || []
+            let allProfCleaned = allProfResult.cleanedText || leoCleaned
+
             const { isProfane: customProfane, flaggedWords: customFlagged } = this.checkCustomAbuseWords(text)
+
+            const revLeo = this.checkReversed(text, t => leoProfanity.check(t.toLowerCase()))
+            const revAllProf = this.checkReversed(
+                text,
+                t => this.allProfanity.check(t),
+                t => this.allProfanity.detect(t)
+            )
+            const revFlagged = revAllProf.flagged || (revLeo.isProfane ? ['(reversed-word)'] : [])
 
             flaggedWords = [
                 ...leoFlagged,
                 ...obscenityWords,
                 ...customFlagged,
+                ...revFlagged,
+                ...allProfFlagged,
                 ...(badWordsProfane ? ['(bad-words-filter)'] : []),
                 ...(hindiProfane ? ['(hindi-profanity)'] : []),
+                ...(allProfanityProfane ? ['(allprofanity)'] : []),
+                ...(revAllProf.isProfane || revLeo.isProfane ? ['(reversed-allprofanity/leo)'] : []),
             ].filter(Boolean)
 
             flaggedWords = [...new Set(flaggedWords)]
@@ -207,13 +257,21 @@ class ProfanityDetector {
                 obscenityMatches.length > 0 ||
                 badWordsProfane ||
                 hindiProfane ||
+                allProfanityProfane ||
+                revLeo.isProfane ||
+                revAllProf.isProfane ||
                 customProfane ||
                 flaggedWords.length > 0
+
+            if (!allProfResult.cleanedText && (revAllProf.isProfane || revLeo.isProfane) && !isProfane) {
+                allProfCleaned = leoCleaned
+
+            }
 
             return {
                 isClean: !isProfane,
                 flaggedWords,
-                cleanedText,
+                cleanedText: allProfCleaned,
                 message: isProfane
                     ? `Content contains ${flaggedWords.length} inappropriate word(s): ${flaggedWords.join(', ')}`
                     : 'Content is clean',
@@ -236,6 +294,12 @@ class ProfanityDetector {
 
         if (leoProfanity.check(lowerText)) return true
 
+        const revText = text
+            .split(/\s+/)
+            .map(w => w.split('').reverse().join(''))
+            .join(' ')
+        if (leoProfanity.check(revText.toLowerCase())) return true
+
         const allWords = [...new Set([...customAbuseWords])]
 
         for (const abuseWord of allWords) {
@@ -256,7 +320,7 @@ class ProfanityDetector {
             }
 
             const pattern = new RegExp(
-                abuseWord
+                (abuseWord as string)
                     .toLowerCase()
                     .split('')
                     .map((char) => {

@@ -33,7 +33,6 @@ export default class LeoProfanityNotesController {
     const payload = await request.validateUsing(createLeoProfanityNoteValidator)
 
     try {
-      // Analyze title and content for profanity
       const [titleAnalysis, contentAnalysis] = await Promise.all([
         this.leoProfanityService.leoProfanityAnalyzeText(payload.title, payload.language),
         this.leoProfanityService.leoProfanityAnalyzeText(payload.content, payload.language),
@@ -41,37 +40,32 @@ export default class LeoProfanityNotesController {
 
       const isClean = titleAnalysis.isClean && contentAnalysis.isClean
 
-      if (!isClean) {
-        const allFlaggedWords = [
-          ...titleAnalysis.flaggedWords,
-          ...contentAnalysis.flaggedWords,
-        ]
-        const uniqueFlagged = [...new Set(allFlaggedWords)]
+      const allFlaggedWords = [
+        ...titleAnalysis.flaggedWords,
+        ...contentAnalysis.flaggedWords,
+      ]
+      const uniqueFlagged = [...new Set(allFlaggedWords)]
 
-        return response.badRequest({
-          success: false,
-          message: 'Your note contains inappropriate language',
-          errors: {
-            flaggedWords: uniqueFlagged,
-            titleAnalysis,
-            contentAnalysis,
-          },
-        })
-      }
-
-      // Create note if content is clean
       const note = await Note.create({
         title: payload.title,
         content: payload.content,
         language: payload.language || null,
-        isFlagged: false,
-        flaggedWords: null,
+        isFlagged: !isClean,
+        flaggedWords: uniqueFlagged.length > 1 ? uniqueFlagged.slice(0, -1).join(',') : null,
       })
 
       return response.created({
         success: true,
-        message: 'Note created successfully',
+        message: isClean
+          ? 'Note created successfully'
+          : 'Note created but contains inappropriate language',
         data: note,
+        moderation: {
+          isClean,
+          flaggedWords: uniqueFlagged,
+          titleAnalysis,
+          contentAnalysis,
+        },
       })
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
@@ -121,7 +115,6 @@ export default class LeoProfanityNotesController {
 
       const payload = await request.validateUsing(updateLeoProfanityNoteValidator)
 
-      // Only analyze provided fields
       const analyses: Array<{ analysis: any; field: keyof typeof payload; value: string }> = []
 
       if (payload.title) {
@@ -140,7 +133,6 @@ export default class LeoProfanityNotesController {
         analyses.push({ analysis: contentAnalysis, field: 'content', value: payload.content })
       }
 
-      // Check if any analysis failed
       const failedAnalysis = analyses.find(analysis => !analysis.analysis.isClean)
 
       if (failedAnalysis) {
@@ -155,7 +147,6 @@ export default class LeoProfanityNotesController {
         })
       }
 
-      // Update note with clean content
       if (payload.title) note.title = payload.title
       if (payload.content) note.content = payload.content
       if (payload.language) note.language = payload.language
@@ -204,7 +195,6 @@ export default class LeoProfanityNotesController {
     }
   }
 
-  // Additional utility method for quick profanity check
   async quickProfanityCheck({ request, response }: HttpContext) {
     try {
       const { text, language } = request.only(['text', 'language'])
