@@ -1,0 +1,3 @@
+@echo off
+echo Starting AdonisJS API...
+npm run dev
