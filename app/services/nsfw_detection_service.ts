@@ -6,7 +6,7 @@ import fs from 'fs/promises'
 import path from 'path'
 
 export default class NsfwDetectionService {
-  private mlServiceUrl = 'http://localhost:8001'
+  private mlServiceUrl = 'http://localhost:8004'  // Back to original port
 
   /**
    * Analyze an uploaded file for NSFW content
@@ -49,7 +49,7 @@ export default class NsfwDetectionService {
       moderationResult.merge({
         isNsfw: analysisResult.is_nsfw,
         nsfwScore: analysisResult.nsfw_score,
-        detectionsCount: analysisResult.detections || 0,
+        detectionsCount: analysisResult.detections_count || 0,
         bodyCoverage: analysisResult.body_coverage || null,
         clothingAnalysis: analysisResult.clothing_analysis || null,
         detailedDescription: analysisResult.detailed_description || null,
@@ -57,11 +57,22 @@ export default class NsfwDetectionService {
         detectedGender: analysisResult.detected_gender || null,
         confidenceScore: analysisResult.confidence_score || null,
         detailedAnalysis: analysisResult.detailed_analysis || null,
-        analysisDetails: JSON.stringify(analysisResult),
+        analysisDetails: JSON.stringify({
+          ...analysisResult,
+          aspectsAnalysis: analysisResult.aspects_analysis || null
+        }),
         status: 'completed'
       })
 
       await moderationResult.save()
+
+      // CLEANUP: Delete the uploaded file after analysis
+      try {
+        await fs.unlink(filePath)
+      } catch (cleanupError) {
+        console.warn(`⚠️ Failed to cleanup file: ${filePath}`, cleanupError)
+      }
+
       return moderationResult
 
     } catch (error) {
@@ -71,6 +82,14 @@ export default class NsfwDetectionService {
         errorMessage: error.message
       })
       await moderationResult.save()
+
+      // CLEANUP: Delete the uploaded file even on error
+      try {
+        await fs.unlink(filePath)
+      } catch (cleanupError) {
+        console.warn(`⚠️ Failed to cleanup file after error: ${filePath}`, cleanupError)
+      }
+
       throw error
     }
   }
@@ -128,7 +147,36 @@ export default class NsfwDetectionService {
       throw new Error(`ML service error: ${response.statusText}`)
     }
 
-    return await response.json()
+    const result = await response.json() as any
+
+    // Handle the NEW AI-powered response structure
+    if (result.success && result.data) {
+      return {
+        is_nsfw: result.data.isNsfw,
+        nsfw_score: result.data.detailedAnalysis?.nsfw_analysis?.nsfw_score || 0,
+        detections_count: result.data.detailedAnalysis?.nsfw_analysis?.nsfw_detections?.length || 0,
+        body_coverage: result.data.isNsfw ? 'NSFW Content Detected' : 'Safe Content',
+        clothing_analysis: result.data.aiGeneratedDescription,
+        detailed_description: result.data.aiGeneratedDescription,
+        coverage_percentage: result.data.detailedAnalysis?.nsfw_analysis?.nsfw_score ?
+          Math.round(result.data.detailedAnalysis.nsfw_analysis.nsfw_score * 100) : 0,
+        detected_gender: result.data.detailedAnalysis?.face_analysis?.faces?.[0]?.gender || 'unknown',
+        confidence_score: result.data.detailedAnalysis?.nsfw_analysis?.nsfw_score || 0,
+        detailed_analysis: result.data.aiGeneratedDescription,
+        aspects_analysis: {
+          context: [result.data.detailedAnalysis?.object_analysis?.context || 'general'], // Make it an array
+          activity: [result.data.detailedAnalysis?.pose_analysis?.activity_type || 'unknown'], // Make it an array
+          faces_detected: result.data.facesDetected || 0,
+          objects_detected: result.data.objectsDetected || 0,
+          purpose: ['ai_analysis'],
+          clothing: ['analysis_completed'],
+          mood: ['neutral'],
+          style: ['computer_vision_analysis']
+        }
+      }
+    } else {
+      throw new Error('Invalid response from ML service')
+    }
   }
 
   /**

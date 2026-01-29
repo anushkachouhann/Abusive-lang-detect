@@ -39,7 +39,9 @@ export default class ModerationsController {
           confidenceScore: result.confidenceScore,
           detailedAnalysis: result.detailedAnalysis,
           status: result.status,
-          createdAt: result.createdAt
+          createdAt: result.createdAt,
+          analyses: result.analysisDetails ? JSON.parse(result.analysisDetails) : null,
+          aspectsAnalysis: result.analysisDetails ? JSON.parse(result.analysisDetails).aspectsAnalysis : null
         }
       })
 
@@ -123,7 +125,7 @@ export default class ModerationsController {
     try {
       // Check if ML service is running
       const fetch = (await import('node-fetch')).default
-      const mlResponse = await fetch('http://localhost:8001/health')
+      const mlResponse = await fetch('http://localhost:8004/health')
 
       return response.ok({
         success: true,

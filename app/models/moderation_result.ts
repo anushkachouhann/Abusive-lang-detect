@@ -24,7 +24,7 @@ export default class ModerationResult extends BaseModel {
   declare detectionsCount: number
 
   @column({ columnName: 'analysis_details' })
-  declare analysisDetails: object | null
+  declare analysisDetails: string | null
 
   @column({ columnName: 'body_coverage' })
   declare bodyCoverage: string | null
