@@ -24,3 +24,22 @@ yarn-error.log
 
 # Platform specific
 .DS_Store
+
+# Python virtual environment and cache
+.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ML models and cache
+openvino_models
+ml-service/cache/
+*.pt
+*.onnx
+
+# Temporary files
+*.tmp
+*.temp
+*-undefined
